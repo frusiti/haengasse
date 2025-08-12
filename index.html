@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<title>Hauskosten Manager mit Firebase</title>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; color: #333; }
+  h1 { text-align: center; }
+  form { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); max-width: 500px; margin: auto; }
+  label { display: block; margin-top: 10px; font-weight: bold; }
+  input, button { width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
+  button { background-color: #007bff; color: white; border: none; cursor: pointer; }
+  button:hover { background-color: #0056b3; }
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
+  th { background-color: #007bff; color: white; }
+  .delete-btn { background-color: red; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+  .delete-btn:hover { background-color: darkred; }
+  #chartContainer, #summaryContainer { max-width: 800px; margin: 30px auto; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  #summaryContainer { font-size: 18px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Hauskosten Manager mit Firebase</h1>
+<form id="costForm">
+  <label>Kategorie: <input type="text" id="category" required></label>
+  <label>Betrag (€): <input type="number" id="amount" required min="0" step="0.01"></label>
+  <label>Startmonat: <input type="month" id="startMonth" required></label>
+  <label>Endmonat: <input type="month" id="endMonth" required></label>
+  <button type="submit">Kosten eintragen</button>
+</form>
+
+<h2>Übersicht</h2>
+<table id="costTable">
+  <thead>
+    <tr><th>Monat</th><th>Kategorie</th><th>Betrag (€)</th><th>Aktion</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<div id="chartContainer">
+  <canvas id="costChart"></canvas>
+</div>
+
+<div id="summaryContainer">
+  <p id="monthlyTotal">Monatliche Gesamtkosten: 0 €</p>
+  <p id="yearlyTotal">Jährliche Gesamtkosten: 0 €</p>
+</div>
+
+<script>
+// Firebase konfigurieren - ERSETZE diese Werte mit deinen eigenen aus der Firebase-Konsole:
+const firebaseConfig = {
+  apiKey: "AIzaSyA8Ez1cffSFumydI1RLHRTd6mxfBxPae2w",
+  authDomain: "hauskosten-manager.firebaseapp.com",
+  projectId: "hauskosten-manager",
+  storageBucket: "hauskosten-manager.firebasestorage.app",
+  messagingSenderId: "742423283194",
+  appId: "1:742423283194:web:ec1d5e4d686d0a7048d043",
+  measurementId: "G-5KV33PRRN5"
+};
+
+// Firebase initialisieren
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+const form = document.getElementById('costForm');
+const tableBody = document.querySelector('#costTable tbody');
+const monthlyTotalEl = document.getElementById('monthlyTotal');
+const yearlyTotalEl = document.getElementById('yearlyTotal');
+
+let costs = [];
+
+// Farben für Kategorien (bleiben gleich)
+const categoryColors = {};
+function getColorForCategory(cat) {
+  if (!categoryColors[cat]) {
+    categoryColors[cat] = `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)`;
+  }
+  return categoryColors[cat];
+}
+
+function renderTable() {
+  tableBody.innerHTML = '';
+  costs.forEach(cost => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${cost.month}</td>
+      <td>${cost.category}</td>
+      <td>${cost.amount.toFixed(2)}</td>
+      <td><button class="delete-btn" onclick="deleteCost('${cost.id}')">Löschen</button></td>
+    `;
+    tableBody.appendChild(tr);
+  });
+  updateSummary();
+}
+
+window.deleteCost = async function(id) {
+  if (confirm('Eintrag wirklich löschen?')) {
+    await db.collection('costs').doc(id).delete();
+    loadCosts();
+  }
+}
+
+function renderChart() {
+  const monthlyData = {};
+  costs.forEach(c => {
+    if (!monthlyData[c.month]) monthlyData[c.month] = {};
+    monthlyData[c.month][c.category] = (monthlyData[c.month][c.category] || 0) + c.amount;
+  });
+
+  const labels = Object.keys(monthlyData).sort();
+  const categories = [...new Set(costs.map(c => c.category))];
+
+  const datasets = categories.map(cat => ({
+    label: cat,
+    data: labels.map(m => monthlyData[m][cat] || 0),
+    backgroundColor: getColorForCategory(cat)
+  }));
+
+  const ctx = document.getElementById('costChart').getContext('2d');
+  if(window.costChartInstance) window.costChartInstance.destroy();
+  window.costChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      scales: { y: { beginAtZero: true } },
+      plugins: { 
+        tooltip: { mode: 'index', intersect: false },
+        title: { display: true, text: 'Monatliche Kosten nach Kategorie' }
+      },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      stacked: true
+    }
+  });
+}
+
+function updateSummary() {
+  if(costs.length === 0) {
+    monthlyTotalEl.textContent = 'Monatliche Gesamtkosten: 0 €';
+    yearlyTotalEl.textContent = 'Jährliche Gesamtkosten: 0 €';
+    return;
+  }
+  const monthlyTotals = {};
+  costs.forEach(c => {
+    monthlyTotals[c.month] = (monthlyTotals[c.month] || 0) + c.amount;
+  });
+  const avgMonthly = Object.values(monthlyTotals).reduce((a,b) => a + b, 0) / Object.keys(monthlyTotals).length;
+  const yearly = avgMonthly * 12;
+  monthlyTotalEl.textContent = 'Monatliche Gesamtkosten: ' + avgMonthly.toFixed(2) + ' €';
+  yearlyTotalEl.textContent = 'Jährliche Gesamtkosten: ' + yearly.toFixed(2) + ' €';
+}
+
+async function loadCosts() {
+  const snapshot = await db.collection('costs').orderBy('month').get();
+  costs = snapshot.docs.map(doc => {
+    const data = doc.data();
+    return { id: doc.id, ...data };
+  });
+  renderTable();
+  renderChart();
+}
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  const category = document.getElementById('category').value.trim();
+  const amount = parseFloat(document.getElementById('amount').value);
+  const startMonth = document.getElementById('startMonth').value;
+  const endMonth = document.getElementById('endMonth').value;
+
+  if (!startMonth || !endMonth) {
+    alert('Bitte Start- und Endmonat auswählen');
+    return;
+  }
+
+  const startDate = new Date(startMonth + '-01');
+  const endDate = new Date(endMonth + '-01');
+
+  if (endDate < startDate) {
+    alert('Bitte gültigen Zeitraum wählen (Endmonat darf nicht vor Startmonat liegen)');
+    return;
+  }
+
+  let months = [];
+  let current = new Date(startDate);
+
+  while (current <= endDate) {
+    months.push(current.toISOString().slice(0, 7));
+    current.setMonth(current.getMonth() + 1);
+  }
+
+  const monthlyAmount = amount / months.length;
+
+  const batch = db.batch();
+
+  months.forEach(month => {
+    const docRef = db.collection('costs').doc();
+    batch.set(docRef, {
+      category,
+      amount: monthlyAmount,
+      month
+    });
+  });
+
+  await batch.commit();
+
+  form.reset();
+  loadCosts();
+});
+
+loadCosts();
+</script>
+</body>
+</html>
